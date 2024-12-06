@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PayPal 手续费计算器</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+        .calculator {
+            margin: 20px auto;
+        }
+        .input-group {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .btn-group {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        select, input {
+            padding: 8px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        input {
+            width: 200px;
+        }
+        .result-box {
+            background-color: #f8f9ff;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .result-title {
+            text-align: center;
+            background-color: #e6ecff;
+            padding: 10px;
+            margin: -15px -15px 15px -15px;
+            border-radius: 4px 4px 0 0;
+            font-size: 14px;
+        }
+        .result-amount {
+            text-align: center;
+            font-size: 24px;
+            margin: 15px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .result-details {
+            text-align: center;
+            color: #666;
+            font-size: 13px;
+            padding: 10px;
+        }
+        .fee-details {
+            margin-bottom: 8px;
+        }
+        .rate-details {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #eee;
+        }
+        button {
+            padding: 8px 20px;
+            font-size: 14px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .calculate-btn {
+            background-color: #0066ff;
+            color: white;
+            border: none;
+        }
+        .reset-btn {
+            background-color: white;
+            color: #0066ff;
+            border: 1px solid #0066ff;
+        }
+        .copy-btn {
+            background: none;
+            border: 1px solid #ddd;
+            padding: 4px 8px;
+            font-size: 12px;
+            color: #666;
+            margin-left: 10px;
+        }
+        .copy-checkmark {
+            color: #22c55e;
+            margin-left: 5px;
+            font-size: 16px;
+        }
+
+        @media screen and (max-width: 480px) {
+            body {
+                padding: 10px;
+                margin: 0;
+            }
+            h1 {
+                font-size: 20px;
+            }
+            .input-group {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 15px;
+            }
+            .input-group > * {
+                width: 100% !important;
+                box-sizing: border-box;
+            }
+            #country-flag {
+                width: 20px !important;
+                height: 15px !important;
+                align-self: center;
+            }
+            #currency-display {
+                text-align: center;
+            }
+            .btn-group {
+                flex-direction: column;
+                gap: 10px;
+            }
+            .btn-group button {
+                width: 100%;
+            }
+            .result-amount {
+                font-size: 20px;
+                flex-direction: column;
+                gap: 5px;
+            }
+            .copy-btn {
+                margin: 5px 0;
+            }
+            .result-details {
+                padding: 0 5px;
+            }
+        }
+    </style>
+</head>
+<body></body>
+    <h1>PayPal 手续费计算器</h1>
+    <div class="calculator">
+        <div class="input-group">
+            <img id="country-flag" src="https://flagcdn.com/w20/us.png" width="20" height="15" alt="country flag">
+            <select id="country">
+                <option value="US">美国</option>
+                <option value="CA">加拿大</option>
+                <option value="UK">英国</option>
+                <option value="DE">德国</option>
+                <option value="IT">意大利</option>
+                <option value="FR">法国</option>
+                <option value="ES">西班牙</option>
+            </select>
+            <input type="number" id="amount" step="0.01" min="0" placeholder="请输入要计算的金额">
+            <span id="currency-display">USD美元</span>
+        </div>
+
+        <div class="btn-group">
+            <button class="calculate-btn" onclick="calculateFee()">一键计算</button>
+            <button class="reset-btn" onclick="resetCalculator()">一键重置</button>
+        </div>
+
+        <div id="result-container" style="display: none;">
+            <div class="result-box">
+                <div class="result-title">若要收到 <span class="amount-display">$ 0.00</span> 则付款人应转出</div>
+                <div class="result-amount">
+                    <span class="result-currency">$USD美元</span> 
+                    <span id="send-amount">0.00</span>
+                    <button class="copy-btn" id="copy-send">点击复制</button>
+                </div>
+                <div class="result-details" id="send-details"></div>
+            </div>
+
+            <div class="result-box">
+                <div class="result-title">若要转出 <span class="amount-display">$ 0.00</span> 则收款人会收到</div>
+                <div class="result-amount">
+                    <span class="result-currency">$USD美元</span> 
+                    <span id="receive-amount">0.00</span>
+                    <button class="copy-btn" id="copy-receive">点击复制</button>
+                </div>
+                <div class="result-details" id="receive-details"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 费率配置
+        const feeRates = {
+            'US': { percentage: 0.0449, fixed: 0.00, currency: 'USD', symbol: '$', flag: 'us', displayCurrency: 'USD美元' },
+            'CA': { percentage: 0.039, fixed: 0.30, currency: 'CAD', symbol: 'C$', flag: 'ca', displayCurrency: 'CAD加元' },
+            'UK': { percentage: 0.0489, fixed: 0.30, currency: 'GBP', symbol: '£', flag: 'gb', displayCurrency: 'GBP英镑' },
+            'DE': { percentage: 0.0548, fixed: 0.39, currency: 'EUR', symbol: '€', flag: 'de', displayCurrency: 'EUR欧元' },
+            'IT': { percentage: 0.0539, fixed: 0.35, currency: 'EUR', symbol: '€', flag: 'it', displayCurrency: 'EUR欧元' },
+            'FR': { percentage: 0.0489, fixed: 0.35, currency: 'EUR', symbol: '€', flag: 'fr', displayCurrency: 'EUR欧元' },
+            'ES': { percentage: 0.0489, fixed: 0.35, currency: 'EUR', symbol: '€', flag: 'es', displayCurrency: 'EUR欧元' }
+        };
+
+        // DOM 元素缓存
+        const elements = {
+            amount: document.getElementById('amount'),
+            country: document.getElementById('country'),
+            countryFlag: document.getElementById('country-flag'),
+            currencyDisplay: document.getElementById('currency-display'),
+            resultContainer: document.getElementById('result-container'),
+            sendAmount: document.getElementById('send-amount'),
+            receiveAmount: document.getElementById('receive-amount'),
+            sendDetails: document.getElementById('send-details'),
+            receiveDetails: document.getElementById('receive-details'),
+            copySend: document.getElementById('copy-send'),
+            copyReceive: document.getElementById('copy-receive')
+        };
+
+        // 计算金额
+        function calculateAmounts(amount, rate) {
+            const fee = (amount * rate.percentage) + rate.fixed;
+            const receiveAmount = (amount - fee).toFixed(2);
+            const sendAmount = ((amount + rate.fixed) / (1 - rate.percentage)).toFixed(2);
+            return { fee, receiveAmount, sendAmount, originalAmount: amount };
+        }
+
+        // 复制到剪贴板
+        async function handleCopy(text, buttonId) {
+            try {
+                await navigator.clipboard.writeText(text);
+                const btn = document.getElementById(buttonId);
+                
+                const checkmark = document.createElement('span');
+                checkmark.textContent = ' ✅';
+                checkmark.classList.add('copy-checkmark');
+                
+                const oldCheckmark = btn.nextElementSibling;
+                if (oldCheckmark?.classList.contains('copy-checkmark')) {
+                    oldCheckmark.remove();
+                }
+                
+                btn.insertAdjacentElement('afterend', checkmark);
+                btn.textContent = '已复制!';
+                
+                setTimeout(() => {
+                    btn.textContent = '点击复制';
+                    checkmark.remove();
+                }, 1000);
+            } catch (err) {
+                console.error('复制失败:', err);
+                alert('复制失败，请重试');
+            }
+        }
+
+        // 更新显示
+        function updateDisplay() {
+            const country = elements.country.value;
+            const rate = feeRates[country];
+            
+            elements.countryFlag.src = `https://flagcdn.com/w20/${rate.flag}.png`;
+            elements.currencyDisplay.textContent = rate.displayCurrency;
+            
+            document.querySelectorAll('.result-currency').forEach(el => {
+                el.textContent = `${rate.symbol}${rate.displayCurrency}`;
+            });
+        }
+
+        // 更新复制按钮
+        function updateCopyButtons() {
+            
+            elements.copySend.onclick = () => handleCopy(
+                elements.sendAmount.textContent,
+                'copy-send'
+            );
+            
+            elements.copyReceive.onclick = () => handleCopy(
+                elements.receiveAmount.textContent,
+                'copy-receive'
+            );
+        }
+
+        // 计算费用
+        function calculateFee() {
+            const amount = parseFloat(elements.amount.value);
+            const country = elements.country.value;
+            const rate = feeRates[country];
+            
+            if (isNaN(amount) || amount <= 0) {
+                alert('请输入有效金额');
+                return;
+            }
+
+            elements.resultContainer.style.display = 'block';
+            
+            const amounts = calculateAmounts(amount, rate);
+            const countryName = elements.country.options[elements.country.selectedIndex].text;
+            
+            elements.sendAmount.textContent = amounts.sendAmount;
+            elements.receiveAmount.textContent = amounts.receiveAmount;
+            
+            elements.sendDetails.innerHTML = `
+                <div class="fee-details">其中: 本金 ${rate.symbol}${rate.currency}${amount.toFixed(2)}, 手续费: ${rate.currency}${(amounts.sendAmount - amount).toFixed(2)}</div>
+                <div class="rate-details">当前费率: ${countryName} PayPal官方${(rate.percentage * 100).toFixed(1)}% + ${rate.symbol}${rate.fixed}</div>
+            `;
+            
+            elements.receiveDetails.innerHTML = `
+                <div class="fee-details">其中: 本金 ${rate.symbol}${rate.currency}${amount.toFixed(2)}, 手续费: ${rate.currency}${amounts.fee.toFixed(2)}</div>
+                <div class="rate-details">当前费率: ${countryName} PayPal官方${(rate.percentage * 100).toFixed(1)}% + ${rate.symbol}${rate.fixed}</div>
+            `;
+            
+            updateCopyButtons();
+        }
+
+        // 重置计算器
+        function resetCalculator() {
+            elements.amount.value = '';
+            elements.resultContainer.style.display = 'none';
+            elements.amount.placeholder = '请输入要计算的金额';
+        }
+
+        // 初始化
+        function init() {
+            elements.amount.addEventListener('keypress', e => {
+                if (e.key === 'Enter') calculateFee();
+            });
+            
+            elements.country.addEventListener('change', updateDisplay);
+            
+            resetCalculator();
+            updateDisplay();
+            updateCopyButtons();
+        }
+
+        // 页面加载完成后初始化
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>

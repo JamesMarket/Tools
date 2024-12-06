@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PayPal 手续费计算器</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+        }
+        h1 {
+            color: #4CAF50;
+        }
+        select, input, button, textarea {
+            margin: 10px;
+            padding: 10px;
+            font-size: 16px;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f4f4f4;
+            border-radius: 5px;
+        }
+        table {
+            width: 80%;
+            margin-top: 20px;
+            border-collapse: collapse;
+            margin: auto;
+        }
+        table, th, td {
+            border: 1px solid #ddd;
+        }
+        th, td {
+            padding: 10px;
+            text-align: center;
+        }
+        .footer {
+            margin-top: 20px;
+            font-size: 14px;
+            color: gray;
+        }
+        .copy-btn {
+            margin-left: 10px;
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .copy-btn:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <h1>PayPal 手续费计算器</h1>
+    
+    <label for="mode">选择计算模式:</label>
+    <select id="mode" onchange="toggleMode()">
+        <option value="single">单个计算</option>
+        <option value="multiple">多笔计算</option>
+    </select>
+    <br>
+
+    <div id="single-mode">
+        <label for="country">选择国家:</label>
+        <select id="country">
+            <option value="美国" data-percentage="0.0449" data-fixed="0">美国</option>
+            <option value="加拿大" data-percentage="0.039" data-fixed="0.3">加拿大</option>
+            <option value="英国" data-percentage="0.0489" data-fixed="0.3">英国</option>
+            <option value="德国" data-percentage="0.0548" data-fixed="0.39">德国</option>
+            <option value="意大利" data-percentage="0.0539" data-fixed="0.35">意大利</option>
+            <option value="法国" data-percentage="0.0489" data-fixed="0.35">法国</option>
+            <option value="西班牙" data-percentage="0.0489" data-fixed="0.35">西班牙</option>
+        </select>
+        <br>
+        <label for="amount">输入金额 (USD):</label>
+        <input type="number" id="amount" placeholder="请输入金额">
+        <br>
+        <button onclick="calculateFee()">计算</button>
+        <button onclick="resetForm()">重置</button>
+    </div>
+
+    <div id="multiple-mode" style="display: none;">
+        <label for="amounts">请输入金额（每行一个金额）：</label>
+        <textarea id="amounts" rows="10" cols="30" placeholder="请输入多个金额，每行一个"></textarea>
+        <br>
+        <button onclick="calculateMultipleFees()">计算多个金额</button>
+    </div>
+
+    <div class="result" id="result">
+        <!-- 计算结果将在这里显示 -->
+    </div>
+
+    <div class="footer">
+        <p>此计算只针对中国个人 PayPal 账户转账 PayPal 费用计算。</p>
+    </div>
+
+    <script>
+        function toggleMode() {
+            const mode = document.getElementById('mode').value;
+            if (mode === 'single') {
+                document.getElementById('single-mode').style.display = 'block';
+                document.getElementById('multiple-mode').style.display = 'none';
+            } else {
+                document.getElementById('single-mode').style.display = 'none';
+                document.getElementById('multiple-mode').style.display = 'block';
+            }
+        }
+
+        function calculateFee() {
+            const amount = parseFloat(document.getElementById('amount').value);
+            const countrySelect = document.getElementById('country');
+            const selectedOption = countrySelect.options[countrySelect.selectedIndex];
+            const percentage = parseFloat(selectedOption.getAttribute('data-percentage'));
+            const fixedFee = parseFloat(selectedOption.getAttribute('data-fixed'));
+
+            if (isNaN(amount) || amount <= 0) {
+                alert('请输入一个有效的金额！');
+                return;
+            }
+
+            // 计算手续费
+            const fee = amount * percentage + fixedFee;
+            const totalToSend = ((amount + fixedFee) / (1 - percentage)).toFixed(2);
+            const netReceived = (amount - fee).toFixed(2);
+
+            // 显示结果
+            document.getElementById('result').innerHTML = `
+                <h3>国家: ${selectedOption.value}</h3>
+                <p>若要收款 $${amount.toFixed(2)}，付款人应转出: <strong>$${totalToSend}</strong></p>
+                <p>若要转出 $${amount.toFixed(2)}，收款人实际收到: <strong>$${netReceived}</strong></p>
+                <p>手续费: <strong>$${fee.toFixed(2)}</strong></p>
+            `;
+        }
+
+        function resetForm() {
+            document.getElementById('amount').value = '';
+            document.getElementById('result').innerHTML = '';
+            document.getElementById('country').selectedIndex = 0;
+        }
+
+        function calculateMultipleFees() {
+            const amountsText = document.getElementById('amounts').value.trim();
+            const amounts = amountsText.split('\n').map(amount => parseFloat(amount.trim()));
+
+            if (amounts.some(amount => isNaN(amount) || amount <= 0)) {
+                alert('请输入有效的金额！');
+                return;
+            }
+
+            const countrySelect = document.getElementById('country');
+            const selectedOption = countrySelect.options[countrySelect.selectedIndex];
+            const percentage = parseFloat(selectedOption.getAttribute('data-percentage'));
+            const fixedFee = parseFloat(selectedOption.getAttribute('data-fixed'));
+
+            let resultTable = '<table><thead><tr><th>金额 (USD)<button class="copy-btn" onclick="copyColumn(0)">复制该列</button></th><th>付款人应转出 (USD)<button class="copy-btn" onclick="copyColumn(1)">复制该列</button></th><th>收款人实际收到 (USD)<button class="copy-btn" onclick="copyColumn(2)">复制该列</button></th><th>手续费 (USD)<button class="copy-btn" onclick="copyColumn(3)">复制该列</button></th></tr></thead><tbody>';
+
+            amounts.forEach(amount => {
+                const fee = amount * percentage + fixedFee;
+                const totalToSend = ((amount + fixedFee) / (1 - percentage)).toFixed(2);
+                const netReceived = (amount - fee).toFixed(2);
+
+                resultTable += `
+                    <tr>
+                        <td>${amount.toFixed(2)}</td>
+                        <td>${totalToSend}</td>
+                        <td>${netReceived}</td>
+                        <td>${fee.toFixed(2)}</td>
+                    </tr>
+                `;
+            });
+
+            resultTable += '</tbody></table>';
+            document.getElementById('result').innerHTML = resultTable;
+        }
+
+        function copyColumn(columnIndex) {
+            const table = document.querySelector("#result table");
+            let columnData = [];
+            for (let row of table.rows) {
+                // Skip the header row
+                if (row.rowIndex === 0) continue;
+                columnData.push(row.cells[columnIndex].innerText);
+            }
+
+            columnData = columnData.join("\n");
+            navigator.clipboard.writeText(columnData).then(() => {
+                alert('该列结果已复制到剪贴板！');
+            }).catch(err => {
+                alert('复制失败: ' + err);
+            });
+        }
+    </script>
+</body>
+</html>

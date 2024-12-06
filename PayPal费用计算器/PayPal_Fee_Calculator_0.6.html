@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>PayPal 手续费计算器</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .calculator {
+            margin: 30px auto;
+        }
+        .input-group {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .btn-group {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        select, input {
+            padding: 8px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .result-box {
+            background-color: #f8f9ff;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .result-title {
+            text-align: center;
+            background-color: #e6ecff;
+            padding: 10px;
+            margin: -15px -15px 15px -15px;
+            border-radius: 4px 4px 0 0;
+        }
+        .result-amount {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-size: 24px;
+            margin: 15px 0;
+        }
+        .result-details {
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+        }
+        button {
+            padding: 8px 20px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .calculate-btn {
+            background-color: #0066ff;
+            color: white;
+        }
+        .reset-btn {
+            background-color: white;
+            color: #0066ff;
+            border: 1px solid #0066ff;
+        }
+        .copy-btn {
+            background: none;
+            border: 1px solid #ddd;
+            padding: 4px 8px;
+            font-size: 12px;
+            color: #666;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        .copy-checkmark {
+            color: #22c55e;
+            margin-left: 5px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>PayPal 手续费计算器</h1>
+    <div class="calculator">
+        <div class="input-group">
+            <img id="country-flag" src="https://flagcdn.com/w20/us.png" width="20" height="15" alt="country flag">
+            <select id="country">
+                <option value="US">美国</option>
+                <option value="CA">加拿大</option>
+                <option value="UK">英国</option>
+                <option value="DE">德国</option>
+                <option value="IT">意大利</option>
+                <option value="FR">法国</option>
+                <option value="ES">西班牙</option>
+            </select>
+            <input type="number" id="amount" step="0.01" min="0" placeholder="请输入要计算的金额">
+            <span id="currency-display">USD 美元</span>
+        </div>
+
+        <div class="btn-group">
+            <button class="calculate-btn" onclick="calculateFee()">一键计算</button>
+            <button class="reset-btn" onclick="resetCalculator()">一键重置</button>
+        </div>
+
+        <div id="result-container" style="display: none;">
+            <div class="result-box">
+                <div class="result-title">若要收到 <span class="amount-display">$ 0.00</span> 则付款人应转出</div>
+                <div class="result-amount">
+                    <span class="result-currency">$USD美元</span> <span id="send-amount">0.00</span>
+                    <button class="copy-btn" id="copy-send">点击复制</button>
+                </div>
+                <div class="result-details" id="send-details"></div>
+            </div>
+
+            <div class="result-box">
+                <div class="result-title">若要转出 <span class="amount-display">$ 0.00</span> 则收款人会收到</div>
+                <div class="result-amount">
+                    <span class="result-currency">$USD美元</span> <span id="receive-amount">0.00</span>
+                    <button class="copy-btn" id="copy-receive">点击复制</button>
+                </div>
+                <div class="result-details" id="receive-details"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const feeRates = {
+            'US': { 
+                percentage: 0.0449, 
+                fixed: 0.00, 
+                currency: 'USD', 
+                symbol: '$',
+                flag: 'us',
+                displayCurrency: 'USD美元'
+            },
+            'CA': { 
+                percentage: 0.039, 
+                fixed: 0.30, 
+                currency: 'CAD', 
+                symbol: 'C$',
+                flag: 'ca',
+                displayCurrency: 'CAD加元'
+            },
+            'UK': { 
+                percentage: 0.0489, 
+                fixed: 0.30, 
+                currency: 'GBP', 
+                symbol: '£',
+                flag: 'gb',
+                displayCurrency: 'GBP英镑'
+            },
+            'DE': { 
+                percentage: 0.0548, 
+                fixed: 0.39, 
+                currency: 'EUR', 
+                symbol: '€',
+                flag: 'de',
+                displayCurrency: 'EUR欧元'
+            },
+            'IT': { 
+                percentage: 0.0539, 
+                fixed: 0.35, 
+                currency: 'EUR', 
+                symbol: '€',
+                flag: 'it',
+                displayCurrency: 'EUR欧元'
+            },
+            'FR': { 
+                percentage: 0.0489, 
+                fixed: 0.35, 
+                currency: 'EUR', 
+                symbol: '€',
+                flag: 'fr',
+                displayCurrency: 'EUR欧元'
+            },
+            'ES': { 
+                percentage: 0.0489, 
+                fixed: 0.35, 
+                currency: 'EUR', 
+                symbol: '€',
+                flag: 'es',
+                displayCurrency: 'EUR欧元'
+            }
+        };
+
+        // 添加回车键触发计算
+        document.getElementById('amount').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                calculateFee();
+            }
+        });
+
+        // 添加国家切换监听
+        document.getElementById('country').addEventListener('change', function() {
+            updateDisplay();
+        });
+
+        // 修改复制功能
+        async function copyToClipboard(text, buttonId) {
+            try {
+                await navigator.clipboard.writeText(text);
+                const btn = document.getElementById(buttonId);
+                
+                // 移除旧的勾号
+                const oldCheckmark = btn.nextElementSibling;
+                if (oldCheckmark && oldCheckmark.classList.contains('copy-checkmark')) {
+                    oldCheckmark.remove();
+                }
+                
+                // 添加新的勾号
+                const checkmark = document.createElement('span');
+                checkmark.textContent = ' ✅';
+                checkmark.classList.add('copy-checkmark');
+                btn.insertAdjacentElement('afterend', checkmark);
+                
+                // 更改按钮文字
+                const originalText = btn.textContent;
+                btn.textContent = '已复制!';
+                
+                // 1秒后恢复按钮文字
+                setTimeout(() => {
+                    btn.textContent = '点击复制';
+                }, 1000);
+            } catch (err) {
+                console.error('复制失败:', err);
+                alert('复制失败，请重试');
+            }
+        }
+
+        function updateDisplay() {
+            const country = document.getElementById('country').value;
+            const rate = feeRates[country];
+            
+            // 更新国旗
+            document.getElementById('country-flag').src = `https://flagcdn.com/w20/${rate.flag}.png`;
+            
+            // 更新货币显示
+            document.getElementById('currency-display').textContent = rate.displayCurrency;
+            
+            // 更新结果中的货币显示
+            const amount = document.getElementById('amount').value || '0';
+            updateResultDisplay(amount, country);
+        }
+
+        function updateResultDisplay(amount, country) {
+            const rate = feeRates[country];
+            
+            // 更新标题中的金额显示
+            document.querySelectorAll('.amount-display').forEach(el => {
+                el.textContent = `${rate.symbol} ${amount}`;
+            });
+            
+            // 更新结果中的货币显示
+            document.querySelectorAll('.result-currency').forEach(el => {
+                el.textContent = `${rate.symbol}${rate.displayCurrency}`;
+            });
+        }
+
+        // 更新复制按钮的事件监听器
+        function updateCopyButtons() {
+            const sendAmount = document.getElementById('send-amount');
+            const receiveAmount = document.getElementById('receive-amount');
+            const country = document.getElementById('country').value;
+            const rate = feeRates[country];
+
+            document.getElementById('copy-send').onclick = function() {
+                copyToClipboard(`${rate.symbol}${sendAmount.textContent}`, 'copy-send');
+            };
+
+            document.getElementById('copy-receive').onclick = function() {
+                copyToClipboard(`${rate.symbol}${receiveAmount.textContent}`, 'copy-receive');
+            };
+        }
+
+        function calculateFee() {
+            const amount = parseFloat(document.getElementById('amount').value);
+            const country = document.getElementById('country').value;
+            const rate = feeRates[country];
+            
+            if (isNaN(amount) || amount <= 0) {
+                alert('请输入有效金额');
+                return;
+            }
+
+            // 显示结果容器
+            document.getElementById('result-container').style.display = 'block';
+            
+            // 更新显示
+            updateResultDisplay(amount.toFixed(2), country);
+            
+            // 计算费用
+            const fee = (amount * rate.percentage) + rate.fixed;
+            const receiveAmount = (amount - fee).toFixed(2);
+            const sendAmount = ((amount + rate.fixed) / (1 - rate.percentage)).toFixed(2);
+            
+            // 更新结果显示
+            document.getElementById('send-amount').textContent = sendAmount;
+            document.getElementById('receive-amount').textContent = receiveAmount;
+            
+            // 更新详细信息
+            document.getElementById('send-details').textContent = 
+                `其中: 本金 ${rate.symbol}${rate.currency}${amount.toFixed(2)}, 手续费: ${rate.currency}${(sendAmount - amount).toFixed(2)} 当前费率: ${document.getElementById('country').options[document.getElementById('country').selectedIndex].text} PayPal官方${(rate.percentage * 100).toFixed(1)}% + ${rate.symbol}${rate.fixed}`;
+                
+            document.getElementById('receive-details').textContent = 
+                `其中: 本金 ${rate.symbol}${rate.currency}${amount.toFixed(2)}, 手续费: ${rate.currency}${fee.toFixed(2)} 当前费率: ${document.getElementById('country').options[document.getElementById('country').selectedIndex].text} PayPal官方${(rate.percentage * 100).toFixed(1)}% + ${rate.symbol}${rate.fixed}`;
+
+            // 更新复制按钮
+            updateCopyButtons();
+        }
+
+        function resetCalculator() {
+            document.getElementById('amount').value = '';
+            document.getElementById('result-container').style.display = 'none';
+            document.getElementById('amount').placeholder = '请输入要计算的金额';
+        }
+
+        // 初始化显示
+        updateDisplay();
+
+        // 页面加载完成后自动执行一次重置
+        window.onload = function() {
+            resetCalculator();
+            updateCopyButtons();
+        }
+    </script>
+</body>
+</html>
