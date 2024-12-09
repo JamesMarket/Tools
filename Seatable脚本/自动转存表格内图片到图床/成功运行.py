@@ -1,3 +1,11 @@
+# 此文件是最终可用的稳定版本
+# 主要功能：
+# 1. 自动扫描SeaTable中所有表格的图片列
+# 2. 将图片上传到指定的图床(img.shuang.fun)
+# 3. 使用状态跟踪列记录处理进度
+# 4. 每次运行限制处理15张图片
+# 5. 包含完整的错误处理和日志输出
+
 from seatable_api import Base, context
 import requests
 import os
@@ -103,7 +111,7 @@ class ImageProcessor:
             print(f"下载图片失败")
             return None
         except Exception as e:
-            print(f"���载图片失败: {str(e)}")
+            print(f"下载图片失败: {str(e)}")
             if os.path.exists(temp_file.name):
                 os.unlink(temp_file.name)
             return None
@@ -267,7 +275,7 @@ def main():
             processor.process_table_images(table_name, column_name)
             
             if processor.processed_count >= processor.max_images_per_run:
-                print("\n已达到本次运行的最大处理数量，将在下次运行继续处理")
+                print("\n已达到本次���行的最大处理数量，将在下次运行继续处理")
                 return
 
 if __name__ == '__main__':
