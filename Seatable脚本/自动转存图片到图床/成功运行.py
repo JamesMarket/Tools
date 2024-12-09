@@ -24,8 +24,6 @@ class CustomStorage:
                 'file': open(temp_file_path, 'rb')
             }
             
-            print(f"正在发送请求到: {self.upload_api}")
-            
             # 发送上传请求
             response = requests.post(
                 self.upload_api,
@@ -36,17 +34,13 @@ class CustomStorage:
             # 关闭文件
             files['file'].close()
             
-            print(f"服务器状态码: {response.status_code}")
-            print(f"服务器响应内容: {response.text}")
-            
             if response.status_code == 200:
                 try:
                     result = response.json()
                     if result.get('url'):
                         return result.get('url')
                     else:
-                        error_msg = result.get('message', '未知错误')
-                        print(f"上传失败: {error_msg}")
+                        print(f"上传失败: {result.get('message', '未知错误')}")
                         return None
                 except json.JSONDecodeError as e:
                     print(f"解析响应JSON失败: {str(e)}")
@@ -64,6 +58,8 @@ class ImageProcessor:
         self.base = Base(api_token, server_url)
         self.base.auth()
         self.storage = CustomStorage(upload_api)
+        self.max_images_per_run = 15  # 每次运行最多处理15张图片
+        self.processed_count = 0
         
     def get_tables(self):
         """获取所有可用的表格列表"""
@@ -76,7 +72,7 @@ class ImageProcessor:
             return []
             
     def get_image_columns(self, columns):
-        """获取表格中的图片类"""
+        """获取表格中的图片类型列"""
         return [col['name'] for col in columns if col.get('type') == 'image']
         
     def download_image(self, image_url):
@@ -107,7 +103,7 @@ class ImageProcessor:
             print(f"下载图片失败")
             return None
         except Exception as e:
-            print(f"下载图片失败: {str(e)}")
+            print(f"���载图片失败: {str(e)}")
             if os.path.exists(temp_file.name):
                 os.unlink(temp_file.name)
             return None
@@ -116,42 +112,48 @@ class ImageProcessor:
         """处理表格的图片"""
         print(f"开始处理表格 {table_name} 中的图片...")
         
+        # 确保存在进度跟踪列
+        self.ensure_progress_column(table_name)
+        
         processed_rows = 0
         total_images = 0
         success_count = 0
         updated_rows = 0
         
-        # 分页处理，每页1000条
-        page_size = 1000
-        start = 0
-        
-        while True:
-            # 获取当前页的数据
-            rows = self.base.list_rows(table_name, start=start, limit=page_size)
+        try:
+            # 获取所有待处理的行
+            rows = self.base.filter_rows(table_name, "图片处理状态", "待处理")
+            
             if not rows:
-                break
-            
-            current_page = start // page_size + 1
-            print(f"\n处理第 {current_page} 页数据，本页 {len(rows)} 条记录")
-            
+                print("没有待处理的行")
+                return
+                
             for row in rows:
+                if self.processed_count >= self.max_images_per_run:
+                    print(f"\n已达到本次运行的最大处理数量 ({self.max_images_per_run}张图片)")
+                    return
+                    
                 processed_rows += 1
                 row_id = row['_id']
                 images = row.get(image_column_name, [])
                 
                 if not images:
+                    self.update_row_status(table_name, row_id, "已完成")
                     continue
                     
                 new_images = []
                 updated = False
                 
-                print(f"处理行 {row_id} 的图片... (已处理 {processed_rows} 行)")
+                print(f"处理行 {row_id} 的图片...")
                 
                 # 确保images是列表
                 if isinstance(images, str):
                     images = [images]
                 
                 for index, image in enumerate(images, 1):
+                    if self.processed_count >= self.max_images_per_run:
+                        break
+                        
                     # 检查是否已经是自定义图床链接
                     if isinstance(image, dict):
                         image_url = image.get('url', '')
@@ -159,64 +161,81 @@ class ImageProcessor:
                         image_url = image
                     
                     if 'img.shuang.fun' in image_url:
-                        print(f"图片 {index} 已经在图床中，跳过")
                         new_images.append(image)
                         continue
                     
                     total_images += 1
+                    self.processed_count += 1
                     
-                    # 下载原图片
-                    print(f"下载图片 {index}...")
                     temp_file_path = self.download_image(image_url)
                     if not temp_file_path:
-                        print(f"图片 {index} 下载失败，保持原链接")
                         new_images.append(image)
                         continue
                     
-                    # 上传到图床
-                    print(f"上传图片 {index} 到自定义图床...")
                     new_url = self.storage.upload_to_custom_storage(temp_file_path)
                     if new_url:
-                        # 成功转存后，不保留原文件信息，只使用新URL
                         new_images.append(new_url)
                         updated = True
                         success_count += 1
-                        print(f"图片 {index} 已成功转存: {new_url}")
                     else:
-                        print(f"图片 {index} 上传失败，保持原链接")
                         new_images.append(image)
                     
-                    # 删除临时文件
                     if os.path.exists(temp_file_path):
                         os.unlink(temp_file_path)
                     
-                    # 避免请求过于频繁
                     time.sleep(1)
                 
                 if updated:
-                    # 更新行数据
                     try:
                         self.base.update_row(
                             table_name,
                             row_id,
-                            {image_column_name: new_images}
+                            {
+                                image_column_name: new_images,
+                                '图片处理状态': '已完成'
+                            }
                         )
-                        print(f"行 {row_id} 更新成功")
                         updated_rows += 1
                     except Exception as e:
                         print(f"更新行 {row_id} 失败: {str(e)}")
+                else:
+                    # 如果没有更新图片，也标记为已完成
+                    self.update_row_status(table_name, row_id, "已完成")
             
-            # 更新起始位置，获取下一页数据
-            start += len(rows)  # 使用实际获取的行数
-            if len(rows) < page_size:  # 如果获取的行数小于页大小，说明已经是最后一页
-                break
-        
-        print(f"\n处理完成！")
-        print(f"总计处理行数: {processed_rows} 行")
-        print(f"包含图片的行数: {updated_rows} 行")
-        print(f"总计处理图片: {total_images} 张")
-        print(f"成功转存: {success_count} 张")
-        print(f"失败: {total_images - success_count} 张")
+            print(f"\n本次处理完成！")
+            print(f"处理行数: {processed_rows} 行")
+            print(f"更新行数: {updated_rows} 行")
+            print(f"处理图片: {total_images} 张")
+            print(f"成功转存: {success_count} 张")
+            print(f"失败: {total_images - success_count} 张")
+            
+        except Exception as e:
+            print(f"处理表格数据时发生错误: {str(e)}")
+
+    def ensure_progress_column(self, table_name):
+        """确保表格中存在进度跟踪列"""
+        try:
+            metadata = self.base.get_metadata()
+            table = next((t for t in metadata['tables'] if t['name'] == table_name), None)
+            if table:
+                columns = table.get('columns', [])
+                if not any(col['name'] == '图片处理状态' for col in columns):
+                    # 添加进度列
+                    self.base.insert_column(table_name, '图片处理状态', 'single-select', 
+                                         options=['待处理', '已完成'])
+                    # 将所有行设置为待处理
+                    rows = self.base.list_rows(table_name)
+                    for row in rows:
+                        self.update_row_status(table_name, row['_id'], '待处理')
+        except Exception as e:
+            print(f"确保进度列失败: {str(e)}")
+
+    def update_row_status(self, table_name, row_id, status):
+        """更新行的处理状态"""
+        try:
+            self.base.update_row(table_name, row_id, {'图片处理状态': status})
+        except Exception as e:
+            print(f"更新行状态失败: {str(e)}")
 
 def main():
     server_url = context.server_url or 'https://cloud.seatable.cn'
@@ -231,30 +250,25 @@ def main():
         print("未找到任何表格，请检查权限和连接状态")
         return
         
-    print("\n开始扫描有表格...")
+    print("\n开始扫描表格...")
     
     # 遍历所有表格
     for table_name, columns in tables:
-        # 获取表格中的图片列
         image_columns = processor.get_image_columns(columns)
         
         if not image_columns:
-            print(f"\n表格 {table_name} 中没有图片列，跳过")
             continue
             
         print(f"\n处理表格: {table_name}")
         print(f"发现图片列: {', '.join(image_columns)}")
         
-        # 处理每图片列
         for column_name in image_columns:
-            print(f"\n开始���理列: {column_name}")
-            try:
-                processor.process_table_images(table_name, column_name)
-            except Exception as e:
-                print(f"处理表格 {table_name} 的列 {column_name} 时发生错误: {str(e)}")
-                continue
-    
-    print("\n所有表格处理完成！")
+            print(f"\n开始处理列: {column_name}")
+            processor.process_table_images(table_name, column_name)
+            
+            if processor.processed_count >= processor.max_images_per_run:
+                print("\n已达到本次运行的最大处理数量，将在下次运行继续处理")
+                return
 
 if __name__ == '__main__':
     main()
