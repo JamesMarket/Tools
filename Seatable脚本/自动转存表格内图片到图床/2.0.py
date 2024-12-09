@@ -5,6 +5,7 @@ import time
 from urllib.parse import urlparse
 import json
 import tempfile
+import asyncio
 
 class CustomStorage:
     def __init__(self, upload_api):
@@ -76,7 +77,7 @@ class ImageProcessor:
             return []
             
     def get_image_columns(self, columns):
-        """获取表格中的图片类"""
+        """获取表格���的图片类"""
         return [col['name'] for col in columns if col.get('type') == 'image']
         
     def download_image(self, image_url):
@@ -177,7 +178,7 @@ class ImageProcessor:
                     print(f"上传图片 {index} 到自定义图床...")
                     new_url = self.storage.upload_to_custom_storage(temp_file_path)
                     if new_url:
-                        # 成功转存后，不保留原文件信息，只使用新URL
+                        # 成��转存后，不保留原文件信息，只使用新URL
                         new_images.append(new_url)
                         updated = True
                         success_count += 1
@@ -207,7 +208,7 @@ class ImageProcessor:
                         print(f"更新行 {row_id} 失败: {str(e)}")
             
             # 更新起始位置，获取下一页数据
-            start += len(rows)  # 使用实际获取的行数
+            start += len(rows)  # 使用实际获���的行数
             if len(rows) < page_size:  # 如果获取的行数小于页大小，说明已经是最后一页
                 break
         
@@ -218,43 +219,50 @@ class ImageProcessor:
         print(f"成功转存: {success_count} 张")
         print(f"失败: {total_images - success_count} 张")
 
-def main():
+    async def process_table_images_async(self, table_name, image_column_name):
+        """异步处理表格图片"""
+        page_size = 50  # 减小批次大小，提高并发效率
+        start = 0
+        
+        while True:
+            rows = self.base.list_rows(table_name, start=start, limit=page_size)
+            if not rows:
+                break
+                
+            # 批量处理当前页数据
+            results = await self.process_batch_async(rows, table_name, image_column_name)
+            
+            # 更新进度
+            start += len(rows)
+            if len(rows) < page_size:
+                break
+
+async def main_async():
     server_url = context.server_url or 'https://cloud.seatable.cn'
     api_token = context.api_token or 'your_api_token'
     upload_api = 'https://img.shuang.fun/api/tgchannel'
     
     processor = ImageProcessor(api_token, server_url, upload_api)
     
-    # 获取所有表格和列信息
     tables = processor.get_tables()
     if not tables:
-        print("未找到任何表格，请检查权限和连接状态")
+        print("未找到任何表格")
         return
         
-    print("\n开始扫描有表格...")
-    
-    # 遍历所有表格
     for table_name, columns in tables:
-        # 获取表格中的图片列
         image_columns = processor.get_image_columns(columns)
-        
         if not image_columns:
-            print(f"\n表格 {table_name} 中没有图片列，跳过")
             continue
             
-        print(f"\n处理表格: {table_name}")
-        print(f"发现图片列: {', '.join(image_columns)}")
-        
-        # 处理每图片列
         for column_name in image_columns:
-            print(f"\n开始���理列: {column_name}")
             try:
-                processor.process_table_images(table_name, column_name)
+                await processor.process_table_images_async(table_name, column_name)
             except Exception as e:
-                print(f"处理表格 {table_name} 的列 {column_name} 时发生错误: {str(e)}")
+                print(f"处理失败: {str(e)}")
                 continue
-    
-    print("\n所有表格处理完成！")
+
+def main():
+    asyncio.run(main_async())
 
 if __name__ == '__main__':
     main()
