@@ -5,6 +5,7 @@ import time
 from urllib.parse import urlparse
 import json
 import tempfile
+from datetime import datetime
 
 class CustomStorage:
     def __init__(self, upload_api):
@@ -75,9 +76,18 @@ class ImageProcessor:
             print(f"获取表格列表失败: {str(e)}")
             return []
             
-    def get_image_columns(self, columns):
-        """获取表格中的图片类"""
-        return [col['name'] for col in columns if col.get('type') == 'image']
+    def get_columns_with_images(self, columns):
+        """获取可能包含图片的列"""
+        image_columns = []
+        for col in columns:
+            col_type = col.get('type')
+            # 只处理图片列和长文本列
+            if col_type in ['image', 'long-text']:
+                image_columns.append({
+                    'name': col['name'],
+                    'type': col_type
+                })
+        return image_columns
         
     def download_image(self, image_url):
         """下载图片"""
@@ -112,9 +122,20 @@ class ImageProcessor:
                 os.unlink(temp_file.name)
             return None
 
-    def process_table_images(self, table_name, image_column_name):
+    def process_table_images(self, table_name, column_info):
         """处理表格的图片"""
-        print(f"开始处理表格 {table_name} 中的图片...")
+        column_name = column_info['name']
+        column_type = column_info['type']
+        print(f"开始处理表格 {table_name} 中的列 {column_name}...")
+        
+        # 构建查询条件
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_str = today.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 使用正确的查询语法
+        query = f"_mtime >= '{today_str}'"  # 使用字符串格式的查询条件
+        
+        print(f"处理 {today_str} 之后更新的数据")
         
         processed_rows = 0
         total_images = 0
@@ -126,97 +147,186 @@ class ImageProcessor:
         start = 0
         
         while True:
-            # 获取当前页的数据
-            rows = self.base.list_rows(table_name, start=start, limit=page_size)
-            if not rows:
-                break
-            
-            current_page = start // page_size + 1
-            print(f"\n处理第 {current_page} 页数据，本页 {len(rows)} 条记录")
-            
-            for row in rows:
-                processed_rows += 1
-                row_id = row['_id']
-                images = row.get(image_column_name, [])
+            try:
+                # 使用正确的API方法
+                rows = self.base.filter_rows(
+                    table_name,
+                    query,
+                    start=start,
+                    limit=page_size
+                )
+                if not rows:
+                    break
                 
-                if not images:
-                    continue
+                for row in rows:
+                    processed_rows += 1
+                    row_id = row['_id']
                     
-                new_images = []
-                updated = False
-                
-                print(f"处理行 {row_id} 的图片... (已处理 {processed_rows} 行)")
-                
-                # 确保images是列表
-                if isinstance(images, str):
-                    images = [images]
-                
-                for index, image in enumerate(images, 1):
-                    # 检查是否已经是自定义图床链接
-                    if isinstance(image, dict):
-                        image_url = image.get('url', '')
+                    if column_type == 'image':
+                        # 处理图片列
+                        images = row.get(column_name, [])
+                        if isinstance(images, str):
+                            images = [images]
                     else:
-                        image_url = image
+                        # 处理富文本列
+                        content = row.get(column_name, '')
+                        images = self.extract_images_from_text(content)
                     
-                    if 'img.shuang.fun' in image_url:
-                        print(f"图片 {index} 已经在图床中，跳过")
-                        new_images.append(image)
+                    if not images:
                         continue
                     
-                    total_images += 1
+                    new_images = []
+                    updated = False
                     
-                    # 下载原图片
-                    print(f"下载图片 {index}...")
-                    temp_file_path = self.download_image(image_url)
-                    if not temp_file_path:
-                        print(f"图片 {index} 下载失败，保持原链接")
-                        new_images.append(image)
-                        continue
+                    print(f"处理行 {row_id} 的图片... (已处理 {processed_rows} 行)")
                     
-                    # 上传到图床
-                    print(f"上传图片 {index} 到自定义图床...")
-                    new_url = self.storage.upload_to_custom_storage(temp_file_path)
-                    if new_url:
-                        # 成功转存后，不保留原文件信息，只使用新URL
-                        new_images.append(new_url)
-                        updated = True
-                        success_count += 1
-                        print(f"图片 {index} 已成功转存: {new_url}")
-                    else:
-                        print(f"图片 {index} 上传失败，保持原链接")
-                        new_images.append(image)
+                    for index, image in enumerate(images, 1):
+                        # 对于富文本image就是URL字符串
+                        image_url = image.get('url', '') if isinstance(image, dict) else image
+                        
+                        if 'img.shuang.fun' in image_url:
+                            print(f"图片 {index} 已经在图床中，跳过")
+                            new_images.append(image)
+                            continue
+                        
+                        total_images += 1
+                        
+                        # 下载和上传处理...（保持原有逻辑）
+                        temp_file_path = self.download_image(image_url)
+                        if not temp_file_path:
+                            new_images.append(image)
+                            continue
+                        
+                        new_url = self.storage.upload_to_custom_storage(temp_file_path)
+                        if new_url:
+                            if column_type == 'image':
+                                new_images.append(new_url)
+                            else:
+                                # 替换富文本中的图��URL
+                                content = content.replace(image_url, new_url)
+                            updated = True
+                            success_count += 1
+                        else:
+                            new_images.append(image)
+                        
+                        if os.path.exists(temp_file_path):
+                            os.unlink(temp_file_path)
+                        
+                        time.sleep(1)
                     
-                    # 删除临时文件
-                    if os.path.exists(temp_file_path):
-                        os.unlink(temp_file_path)
-                    
-                    # 避免请求过于频繁
-                    time.sleep(1)
+                    if updated:
+                        try:
+                            update_data = {
+                                column_name: content if column_type != 'image' else new_images
+                            }
+                            self.base.update_row(table_name, row_id, update_data)
+                            updated_rows += 1
+                        except Exception as e:
+                            print(f"更新行 {row_id} 失败: {str(e)}")
                 
-                if updated:
-                    # 更新行数据
-                    try:
-                        self.base.update_row(
-                            table_name,
-                            row_id,
-                            {image_column_name: new_images}
-                        )
-                        print(f"行 {row_id} 更新成功")
-                        updated_rows += 1
-                    except Exception as e:
-                        print(f"更新行 {row_id} 失败: {str(e)}")
-            
-            # 更新起始位置，获取下一页数据
-            start += len(rows)  # 使用实际获取的行数
-            if len(rows) < page_size:  # 如果获取的行数小于页大小，说明已经是最后一页
+                start += len(rows)
+                if len(rows) < page_size:
+                    break
+                
+            except Exception as e:
+                print(f"查询数据失败: {str(e)}")
                 break
         
         print(f"\n处理完成！")
         print(f"总计处理行数: {processed_rows} 行")
-        print(f"包含图片的行数: {updated_rows} 行")
+        print(f"包含图���的行数: {updated_rows} 行")
         print(f"总计处理图片: {total_images} 张")
         print(f"成功转存: {success_count} 张")
         print(f"失败: {total_images - success_count} 张")
+
+    def extract_images_from_text(self, text):
+        """从富文本中提取图片URL"""
+        if not text:
+            return []
+        
+        # 使用正则表达式匹配图片URL
+        import re
+        # 匹配markdown格式的图片
+        markdown_pattern = r'!\[.*?\]\((.*?)\)'
+        # 匹配HTML格式的图片
+        html_pattern = r'<img.*?src=[\'"](.*?)[\'"].*?>'
+        
+        urls = []
+        # 查找所有markdown格式的图片
+        urls.extend(re.findall(markdown_pattern, text))
+        # 查找所有HTML格式的图片
+        urls.extend(re.findall(html_pattern, text))
+        
+        return list(set(urls))  # 去重
+
+    def get_files_from_workspace(self):
+        """获取工作区中的所有图片文件"""
+        try:
+            # 使用正确的API方法
+            files = self.base.get_file_list()  # 使用 get_file_list 方法
+            image_files = []
+            for file in files:
+                file_name = file.get('name', '').lower()
+                if any(file_name.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif']):
+                    image_files.append(file)
+            return image_files
+        except Exception as e:
+            print(f"获取工作区文件失败: {str(e)}")
+            return []
+
+    def process_workspace_images(self):
+        """处理工作区中的图片"""
+        print("开始处理工作区中的图片...")
+        
+        # 获取所有图片文件
+        image_files = self.get_files_from_workspace()
+        if not image_files:
+            print("未找到图片文件")
+            return
+            
+        print(f"找到 {len(image_files)} 个图片文件")
+        
+        total_files = len(image_files)
+        success_count = 0
+        
+        for index, file in enumerate(image_files, 1):
+            file_name = file.get('name')
+            file_url = file.get('url')
+            
+            print(f"\n处理文件 {index}/{total_files}: {file_name}")
+            
+            # 下载图片
+            temp_file_path = self.download_image(file_url)
+            if not temp_file_path:
+                print(f"下载文件 {file_name} 失败，跳过")
+                continue
+            
+            # 上传到图床
+            new_url = self.storage.upload_to_custom_storage(temp_file_path)
+            if new_url:
+                print(f"文件 {file_name} 已成功转存到图床")
+                success_count += 1
+                
+                # 删除原文件
+                try:
+                    self.base.delete_file(file_name)  # 使用 delete_file 方法
+                    print(f"已删除原文件 {file_name}")
+                except Exception as e:
+                    print(f"删除原文件 {file_name} 失败: {str(e)}")
+            else:
+                print(f"上传文件 {file_name} 到图床失败")
+            
+            # 清理临时文件
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+            
+            # 避免请求过于频繁
+            time.sleep(1)
+        
+        print(f"\n处理完成！")
+        print(f"总计处理文件: {total_files} 个")
+        print(f"成功转存: {success_count} 个")
+        print(f"失败: {total_files - success_count} 个")
 
 def main():
     server_url = context.server_url or 'https://cloud.seatable.cn'
@@ -225,33 +335,36 @@ def main():
     
     processor = ImageProcessor(api_token, server_url, upload_api)
     
-    # 获取所有表格和列信息
+    # 处理工作区文件
+    print("\n开始处理工作区文件...")
+    processor.process_workspace_images()
+    
+    # 处理表格中的图片列
+    print("\n开始处理表格...")
     tables = processor.get_tables()
     if not tables:
         print("未找到任何表格，请检查权限和连接状态")
         return
-        
-    print("\n开始扫描有表格...")
     
     # 遍历所有表格
     for table_name, columns in tables:
-        # 获取表格中的图片列
-        image_columns = processor.get_image_columns(columns)
+        # 获取可能包含图片的列
+        image_columns = processor.get_columns_with_images(columns)
         
         if not image_columns:
-            print(f"\n表格 {table_name} 中没有图片列，跳过")
+            print(f"\n表格 {table_name} 没有可能包含图片的列，跳过")
             continue
             
         print(f"\n处理表格: {table_name}")
-        print(f"发现图片列: {', '.join(image_columns)}")
+        print(f"发现可能包含图片的列: {', '.join(col['name'] for col in image_columns)}")
         
-        # 处理每图片列
-        for column_name in image_columns:
-            print(f"\n开始���理列: {column_name}")
+        # 处理每个列
+        for column_info in image_columns:
+            print(f"\n开始处理列: {column_info['name']} (类型: {column_info['type']})")
             try:
-                processor.process_table_images(table_name, column_name)
+                processor.process_table_images(table_name, column_info)
             except Exception as e:
-                print(f"处理表格 {table_name} 的列 {column_name} 时发生错误: {str(e)}")
+                print(f"处理表格 {table_name} 的列 {column_info['name']} 时发生错误: {str(e)}")
                 continue
     
     print("\n所有表格处理完成！")
