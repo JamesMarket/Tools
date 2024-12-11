@@ -137,14 +137,60 @@ def create_seatable_connection(api_token, server_url, max_retries=3):
             else:
                 raise e
 
-def verify_image_url(image_url):
+def verify_image_size(image_url, min_size=1000):
     """
-    验证图片URL是否有效
+    验证图片尺寸是否达到最低要求
+    Args:
+        image_url: 图片URL
+        min_size: 最小边长要求（像素）
+    Returns:
+        bool: 是否满足尺寸要求
     """
     try:
+        # 使用stream模式下载图片头部信息
+        response = session.get(image_url, stream=True, timeout=5)
+        if response.status_code != 200:
+            return False
+            
+        # 读取图片的前32KB来获取尺寸信息
+        image_data = response.raw.read(32768)
+        
+        # 使用BytesIO避免下载整个图片
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_data))
+        
+        # 获取图片尺寸
+        width, height = img.size
+        print_log(f"图片尺寸: {width}x{height} 像素", "INFO")
+        
+        # 检查最小边长是否达标
+        return min(width, height) >= min_size
+        
+    except Exception as e:
+        print_log(f"验证图片尺寸时出错: {str(e)}", "WARN")
+        return False
+    finally:
+        if 'response' in locals():
+            response.close()
+
+def verify_image_url(image_url, check_size=True):
+    """
+    验证图片URL是否有效且满足尺寸要求
+    """
+    try:
+        # 基本可访问性检查
         response = session.head(image_url, timeout=5)
-        return response.status_code == 200
-    except:
+        if response.status_code != 200:
+            return False
+            
+        # 检查是否需要验证尺寸
+        if check_size:
+            return verify_image_size(image_url)
+            
+        return True
+    except Exception as e:
+        print_log(f"验证图片URL时出错: {str(e)}", "WARN")
         return False
 
 def update_row_with_retry(base, table_name, row_id, data, max_retries=3):
@@ -194,6 +240,44 @@ def get_amazon_domain(url):
             return domain, domain_map[domain]
     return 'amazon.com', 'US'  # 默认返回美国站点
 
+def optimize_amazon_image_url(url):
+    """
+    优化亚马逊图片URL以获取高清版本
+    
+    Args:
+        url: 原始图片URL
+    Returns:
+        优化后的URL
+    """
+    if not url:
+        return url
+        
+    # 1. 提取图片ID和扩展名
+    match = re.search(r'/images/I/([^\.]+).*\.(jpg|png)', url)
+    if not match:
+        return url
+        
+    image_id = match.group(1)
+    ext = match.group(2)
+    
+    # 2. 构建标准格式的高清URL
+    hd_url = f"https://m.media-amazon.com/images/I/{image_id}._AC_SL1500_.{ext}"
+    
+    # 3. 验证高清URL是否可用
+    if verify_image_url(hd_url, check_size=True):
+        return hd_url
+        
+    # 4. 如果1500不可用，尝试其他尺寸
+    sizes = [1200, 1000, 800]
+    for size in sizes:
+        alt_url = f"https://m.media-amazon.com/images/I/{image_id}._AC_SL{size}_.{ext}"
+        if verify_image_url(alt_url, check_size=True):
+            return alt_url
+            
+    # 5. 如果所有高清版本都不可用，返回原始URL
+    print_log("无法获取高清版本，使用原始URL", "WARN")
+    return url
+
 def get_amazon_image(url, history, max_retries=5):
     """
     从亚马逊产品页面获取主图片URL，带重试机制
@@ -236,6 +320,21 @@ def get_amazon_image(url, history, max_retries=5):
         'Cache-Control': 'max-age=0'
     }
     
+    # 图片URL优先级列表
+    image_patterns = [
+        # 高清图片URL (优先使用data-a-dynamic-image中的最大尺寸)
+        r'data-a-dynamic-image="([^"]+)"',
+        # 原始高清图片
+        r'data-old-hires="(https://[^"]+)"',
+        r'data-zoom-hires="(https://[^"]+)"',
+        # 主图片URL
+        r'id="landingImage"[^>]+src="(https://[^"]+)"',
+        r'id="imgBlkFront"[^>]+src="(https://[^"]+)"',
+        # 其他图片URL
+        r'"large":"(https://[^"]+\.jpg)"',
+        r'"main":"(https://[^"]+\.jpg)"'
+    ]
+    
     for attempt in range(max_retries):
         try:
             if attempt == 0:
@@ -273,7 +372,7 @@ def get_amazon_image(url, history, max_retries=5):
                     if chunk:
                         content += chunk
                 
-                # 1. 首先尝试从data-a-dynamic-image中获取（通常包含最高质量的图片）
+                # 1. 首先尝试从data-a-dynamic-image中获取（���常包含最高质量的图片）
                 dynamic_image_match = re.search(r'data-a-dynamic-image="([^"]+)"', content)
                 if dynamic_image_match:
                     try:
@@ -288,25 +387,6 @@ def get_amazon_image(url, history, max_retries=5):
                         print_log(f"解析动态图片数据失败: {str(e)}", "WARN")
                 
                 # 2. 尝试其他图片URL模式
-                image_patterns = [
-                    # 高清图片URL
-                    r'data-old-hires="(https://[^"]+)"',
-                    r'data-zoom-hires="(https://[^"]+)"',
-                    r'data-a-dynamic-image="([^"]+)"',
-                    # 主图片URL
-                    r'id="landingImage"[^>]+src="(https://[^"]+)"',
-                    r'id="imgBlkFront"[^>]+src="(https://[^"]+)"',
-                    r'id="main-image-container"[^>]+href="(https://[^"]+)"',
-                    # 产品图片URL
-                    r'"large":"(https://[^"]+\.jpg)"',
-                    r'"main":"(https://[^"]+\.jpg)"',
-                    r'"mainUrl":"(https://[^"]+)"',
-                    # 备用图片URL
-                    r'data-a-image-name="[^"]*"[^>]*src="(https://[^"]+)"',
-                    r'id="main-image"[^>]+src="(https://[^"]+)"',
-                    r'class="a-dynamic-image"[^>]+src="(https://[^"]+)"'
-                ]
-                
                 for pattern in image_patterns:
                     matches = re.findall(pattern, content)
                     if matches:
@@ -361,28 +441,25 @@ def process_single_row(row, base, table_name, total, index, history):
             print_log("产品链接为空，跳过处理", "WARN")
             return {'status': 'skipped', 'reason': 'empty_link'}
         
-        # 检查历史记录
-        history_record = history.get_record(product_url)
-        if history_record:
-            print_log("发现重复链接，使用缓存的图片URL", "INFO")
-            new_image_url = history_record['image_url']
-        else:
-            # 获取新的图片URL
-            new_image_url = get_amazon_image(product_url, history)
-        
-        if not new_image_url:
-            print_log("获取新图片失败", "ERROR")
-            return {'status': 'failed', 'reason': 'no_image'}
-        
-        # 获取当前的图片URL
+        # 获取当前图片URL
         current_image = row.get('产品图片')
         current_image_url = current_image[0] if current_image and isinstance(current_image, list) and len(current_image) > 0 else None
         
-        # 严格比较新旧图片URL
+        # 获取新的图片URL并优化
+        new_image_url = get_amazon_image(product_url, history)
+        if not new_image_url:
+            print_log("获取新图片失败", "ERROR")
+            return {'status': 'failed', 'reason': 'no_image'}
+            
+        # 只对新获取的图片URL进行优化
+        optimized_new = optimize_amazon_image_url(new_image_url)
+        print_log(f"优化后的新图片URL: {optimized_new}", "INFO")
+        
+        # 直接比较当前URL和优化后的新URL
         if current_image_url:
             # 清理URL中的跟踪参数进行比较
             clean_current = re.sub(r'\?.*$', '', current_image_url)
-            clean_new = re.sub(r'\?.*$', '', new_image_url)
+            clean_new = re.sub(r'\?.*$', '', optimized_new)
             
             if clean_current == clean_new:
                 print_log("图片URL相同，无需更新", "INFO")
@@ -391,7 +468,7 @@ def process_single_row(row, base, table_name, total, index, history):
         
         # 更新图片URL
         row_id = row['_id']
-        if update_row_with_retry(base, table_name, row_id, {'产品图片': [new_image_url]}):
+        if update_row_with_retry(base, table_name, row_id, {'产品图片': [optimized_new]}):
             print_log("图片更新成功", "SUCCESS")
             return {'status': 'updated'}
         
@@ -400,6 +477,69 @@ def process_single_row(row, base, table_name, total, index, history):
     except Exception as e:
         print_log(f"处理数据时出错: {str(e)}", "ERROR")
         return {'status': 'failed', 'reason': 'process_error'}
+
+def format_amazon_image_url(image_id, size=1500):
+    """
+    格式化Amazon图片URL
+    
+    Args:
+        image_id: 图片ID (如 '712mKQsLEbL')
+        size: 图片尺寸 (默认1500)
+        
+    Returns:
+        格式化后的URL
+    """
+    return f"https://m.media-amazon.com/images/I/{image_id}._AC_SL{size}_.jpg"
+
+def clean_image_url(url):
+    """清理和标准化图片URL"""
+    if not url:
+        return url
+        
+    # 移除._A部分，这是一个错误的URL格式
+    url = url.replace('._A.', '.')
+    
+    # 确保使用最高质量的图片
+    if '_AC_' in url:
+        # 提取基本URL部分
+        base_url = url.split('_AC_')[0]
+        # 添加最高质量后缀
+        url = f"{base_url}_AC_SL1500_.jpg"
+        
+    return url
+
+def extract_image_url(url, session, history):
+    """从产品页面提取图片URL"""
+    try:
+        # 获取页面内容
+        response = session.get(url, timeout=10)
+        
+        if response.status_code != 200:
+            print_log(f"页面请求失败: HTTP {response.status_code}", "ERROR")
+            return None
+            
+        # 尝试提取图片URL
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # 1. 首先尝试从动态加载的数据中提取
+        scripts = soup.find_all('script', type='text/javascript')
+        for script in scripts:
+            if 'colorImages' in script.text:
+                try:
+                    # 提取JSON数据
+                    json_str = re.search(r'colorImages\s*:\s*({.*?}),\s*\n', script.text)
+                    if json_str:
+                        data = json.loads(json_str.group(1))
+                        if data and 'initial' in data:
+                            image_url = data['initial'][0]['hiRes']
+                            # 清理和标准化URL
+                            image_url = clean_image_url(image_url)
+                            return image_url
+                except Exception as e:
+                    print_log(f"解析动态图片数据失败: {str(e)}", "WARN")
+    except Exception as e:
+        print_log(f"从产品页面提取图片URL时出错: {str(e)}", "ERROR")
+        return None
 
 def main():
     """
@@ -500,7 +640,7 @@ def main():
         
         # 在最终统计中添加新的统计项
         print_log(f"🔄 URL相同跳过: {history.stats['unchanged']} 条", "INFO")
-        print_log(f"♻️ 重复链接复用: {history.stats['reused']} 条", "INFO")
+        print_log(f"♻️ 重复链接复: {history.stats['reused']} 条", "INFO")
         print_log(f"🆕 新获取图片数: {history.stats['new']} 条", "INFO")
         
         # 在最终统计之后，程序结束前清理缓存
