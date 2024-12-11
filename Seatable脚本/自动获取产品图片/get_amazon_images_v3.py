@@ -1,3 +1,8 @@
+# 配置参数
+SERVER_URL = 'https://cloud.seatable.cn'
+API_TOKEN = '7d67fb2e9a309d5f5c25099d65c844a01d7c6c40'
+TABLE_NAME = 'Task'
+
 from seatable_api import Base
 import requests
 import re
@@ -32,12 +37,33 @@ adapter = HTTPAdapter(
 session.mount("http://", adapter)
 session.mount("https://", adapter)
 
+def get_all_rows(base, table_name):
+    """
+    分页获取表格中的所有数据
+    """
+    print_log("开始获取表格数据...", "INFO")
+    all_rows = []
+    page_size = 1000
+    start = 0
+    
+    while True:
+        rows = base.list_rows(table_name, start=start, limit=page_size)
+        if not rows:
+            break
+        all_rows.extend(rows)
+        start += page_size
+        print_log(f"已获取 {len(all_rows)} 条数据", "INFO")
+    
+    print_log(f"总共获取 {len(all_rows)} 条数据", "SUCCESS")
+    return all_rows
+
 class RunningHistory:
     def __init__(self):
         self.history = {}
         self.stats = {
-            'reused': 0,  # 重复使用的次数
-            'new': 0      # 新提取的次数
+            'reused': 0,    # 重复使用的次数
+            'new': 0,       # 新提取的次数
+            'unchanged': 0   # URL相同的次数
         }
     
     def get_url_hash(self, url):
@@ -49,22 +75,33 @@ class RunningHistory:
     
     def add_record(self, url, image_url, success=True):
         """添加记录"""
+        if not url:
+            return
         url_hash = self.get_url_hash(url)
-        self.history[url_hash] = {
-            'url': url,
-            'image_url': image_url,
-            'success': success,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        self.stats['new'] += 1
+        if url_hash not in self.history:
+            self.history[url_hash] = {
+                'url': url,
+                'image_url': image_url,
+                'success': success,
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            self.stats['new'] += 1
     
     def get_record(self, url):
         """获取记录"""
+        if not url:
+            return None
         url_hash = self.get_url_hash(url)
         record = self.history.get(url_hash)
-        if record:
+        if record and record['success']:
             self.stats['reused'] += 1
+            print_log(f"使用缓存的图片URL: {record['image_url']}", "INFO")
         return record
+    
+    def clear_history(self):
+        """清理所有缓存"""
+        self.history.clear()
+        print_log("已清理所有缓存", "INFO")
 
 def print_log(message, status=""):
     """
@@ -99,6 +136,16 @@ def create_seatable_connection(api_token, server_url, max_retries=3):
                 time.sleep(delay)
             else:
                 raise e
+
+def verify_image_url(image_url):
+    """
+    验证图片URL是否有效
+    """
+    try:
+        response = session.head(image_url, timeout=5)
+        return response.status_code == 200
+    except:
+        return False
 
 def update_row_with_retry(base, table_name, row_id, data, max_retries=3):
     """
@@ -174,7 +221,7 @@ def get_amazon_image(url, history, max_retries=5):
     domain, site = get_amazon_domain(url)
     print_log(f"识别到站点: {site} ({domain})", "INFO")
     
-    # 更完整的请求头
+    # 更新请求头
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -237,12 +284,12 @@ def get_amazon_image(url, history, max_retries=5):
                         print_log(f"成功获取动态图片: {image_url}", "SUCCESS")
                         history.add_record(url, image_url, True)
                         return image_url
-                    except:
-                        pass
+                    except Exception as e:
+                        print_log(f"解析动态图片数据失败: {str(e)}", "WARN")
                 
                 # 2. 尝试其他图片URL模式
                 image_patterns = [
-                    # 高���图片URL
+                    # 高清图片URL
                     r'data-old-hires="(https://[^"]+)"',
                     r'data-zoom-hires="(https://[^"]+)"',
                     r'data-a-dynamic-image="([^"]+)"',
@@ -280,9 +327,12 @@ def get_amazon_image(url, history, max_retries=5):
                             
                             # 验证图片URL是否有效
                             if 'sprite' not in image_url.lower() and 'placeholder' not in image_url.lower():
-                                print_log(f"成功获取图片: {image_url}", "SUCCESS")
-                                history.add_record(url, image_url, True)
-                                return image_url
+                                if verify_image_url(image_url):
+                                    print_log(f"成功获取图片: {image_url}", "SUCCESS")
+                                    history.add_record(url, image_url, True)
+                                    return image_url
+                                else:
+                                    print_log(f"图片URL无效: {image_url}", "WARN")
                 
                 print_log(f"第 {attempt + 1} 次尝试未找到图片", "WARN")
                 
@@ -311,44 +361,42 @@ def process_single_row(row, base, table_name, total, index, history):
             print_log("产品链接为空，跳过处理", "WARN")
             return {'status': 'skipped', 'reason': 'empty_link'}
         
+        # 检查历史记录
+        history_record = history.get_record(product_url)
+        if history_record:
+            print_log("发现重复链接，使用缓存的图片URL", "INFO")
+            new_image_url = history_record['image_url']
+        else:
+            # 获取新的图片URL
+            new_image_url = get_amazon_image(product_url, history)
+        
+        if not new_image_url:
+            print_log("获取新图片失败", "ERROR")
+            return {'status': 'failed', 'reason': 'no_image'}
+        
         # 获取当前的图片URL
         current_image = row.get('产品图片')
-        current_image_url = None
-        if current_image and isinstance(current_image, list) and len(current_image) > 0:
-            current_image_url = current_image[0]
-            print_log(f"当前已有图片: {current_image_url}", "INFO")
+        current_image_url = current_image[0] if current_image and isinstance(current_image, list) and len(current_image) > 0 else None
+        
+        # 严格比较新旧图片URL
+        if current_image_url:
+            # 清理URL中的跟踪参数进行比较
+            clean_current = re.sub(r'\?.*$', '', current_image_url)
+            clean_new = re.sub(r'\?.*$', '', new_image_url)
             
-        # 获取新的图片URL（带重试机制）
-        new_image_url = get_amazon_image(product_url, history)
-        if not new_image_url:
-            print_log("获取新图片失败，保持原图片不变", "WARN")
-            if current_image_url:
-                print_log("保留原有图片", "INFO")
-                return {'status': 'skipped', 'reason': 'kept_original'}
-            else:
-                print_log("无原有图片", "WARN")
-                return {'status': 'failed', 'reason': 'no_image'}
-                
-        # 比较新旧图片URL
-        if current_image_url == new_image_url:
-            print_log("图片未发生变化，无需更新", "INFO")
-            return {'status': 'skipped', 'reason': 'unchanged'}
-            
-        # 更新产品图片列
+            if clean_current == clean_new:
+                print_log("图片URL相同，无需更新", "INFO")
+                history.stats['unchanged'] += 1
+                return {'status': 'skipped', 'reason': 'unchanged'}
+        
+        # 更新图片URL
         row_id = row['_id']
-        print_log(f"正在更新图片...", "INFO")
-        try:
-            if update_row_with_retry(base, table_name, row_id, {'产品图片': [new_image_url]}):
-                print_log(f"图片更新成功", "SUCCESS")
-                return {'status': 'updated'}
-        except Exception as e:
-            print_log(f"图片更新失败: {str(e)}", "ERROR")
-            if current_image_url:
-                print_log("保留原有图片", "INFO")
-                return {'status': 'skipped', 'reason': 'kept_original'}
-            else:
-                return {'status': 'failed', 'reason': 'update_failed'}
-                
+        if update_row_with_retry(base, table_name, row_id, {'产品图片': [new_image_url]}):
+            print_log("图片更新成功", "SUCCESS")
+            return {'status': 'updated'}
+        
+        return {'status': 'failed', 'reason': 'update_failed'}
+        
     except Exception as e:
         print_log(f"处理数据时出错: {str(e)}", "ERROR")
         return {'status': 'failed', 'reason': 'process_error'}
@@ -357,25 +405,28 @@ def main():
     """
     主函数
     """
-    start_time = datetime.now()
-    print_log("="*50)
-    print_log("开始执行自动获取亚马逊产品图片任务", "INFO")
-    print_log("="*50)
-    
-    server_url = 'https://cloud.seatable.cn'
-    api_token = '7d67fb2e9a309d5f5c25099d65c844a01d7c6c40'
-    
     try:
+        print_log("正在初始化程序...", "INFO")
+        start_time = datetime.now()
+        print_log("="*50)
+        print_log("开始执行自动获取亚马逊产品图片任务", "INFO")
+        print_log("="*50)
+        
+        print_log("检查网络连接...", "INFO")
+        try:
+            requests.get(SERVER_URL, timeout=5)
+            print_log("网络连接正常", "SUCCESS")
+        except Exception as e:
+            print_log(f"网络连接测试失败: {str(e)}", "ERROR")
+            raise
+        
         print_log("正在连接到SeaTable...", "INFO")
-        base = create_seatable_connection(api_token, server_url)
+        base = create_seatable_connection(API_TOKEN, SERVER_URL)
         print_log("SeaTable连接成功", "SUCCESS")
         
         # 获取表格数据
-        table_name = "Task"
-        print_log(f"正在获取表格 {table_name} 的数据...", "INFO")
-        rows = base.list_rows(table_name)
+        rows = get_all_rows(base, TABLE_NAME)
         total_rows = len(rows)
-        print_log(f"成功获取 {total_rows} 行数据", "SUCCESS")
         
         # 初始化结果统计
         results = {
@@ -396,7 +447,7 @@ def main():
             print_log("-"*30)
             
             # 处理单行数据
-            result = process_single_row(row, base, table_name, total_rows, index, history)
+            result = process_single_row(row, base, TABLE_NAME, total_rows, index, history)
             
             # 更新统计
             if result['status'] == 'updated':
@@ -447,8 +498,23 @@ def main():
         print_log(f"❌ 处理失败: {results['failed']} 条", "ERROR")
         print_log("="*50)
         
+        # 在最终统计中添加新的统计项
+        print_log(f"🔄 URL相同跳过: {history.stats['unchanged']} 条", "INFO")
+        print_log(f"♻️ 重复链接复用: {history.stats['reused']} 条", "INFO")
+        print_log(f"🆕 新获取图片数: {history.stats['new']} 条", "INFO")
+        
+        # 在最终统计之后，程序结束前清理缓存
+        print_log("\n正在清理缓存...", "INFO")
+        history.clear_history()
+        
     except Exception as e:
         print_log(f"程序执行出错: {str(e)}", "ERROR")
         
 if __name__ == '__main__':
-    main() 
+    try:
+        print_log("开始执行主程序", "INFO")
+        main()
+    except Exception as e:
+        print_log(f"程序执行出现致命错误: {str(e)}", "ERROR")
+        import traceback
+        print_log(f"错误详情:\n{traceback.format_exc()}", "ERROR") 
