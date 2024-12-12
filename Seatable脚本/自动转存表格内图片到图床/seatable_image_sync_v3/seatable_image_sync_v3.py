@@ -1,15 +1,97 @@
 import os
+import json
 import time
-import tempfile
 import logging
+import tempfile
 from typing import Dict, List, Any, Optional
+from urllib.parse import urlparse
 from seatable_api import Base
 import requests
 
-from config import Config
-from utils import ProgressManager, ImageProcessor
-
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('sync.log', encoding='utf-8')
+    ]
+)
 logger = logging.getLogger(__name__)
+
+class Config:
+    """配置管理"""
+    def __init__(self):
+        """初始化配置"""
+        self.config = self._load_from_env()
+
+    def _parse_base_tokens(self, tokens_str: str) -> List[Dict[str, str]]:
+        """解析base tokens
+        格式: [{"name": "base1", "token": "token1"}, {"name": "base2", "token": "token2"}]
+        或者: token1,token2,token3
+        """
+        if not tokens_str:
+            return []
+            
+        try:
+            # 尝试解析JSON格式
+            bases = json.loads(tokens_str)
+            if isinstance(bases, list):
+                return bases
+        except json.JSONDecodeError:
+            # 如果不是JSON格式，则按逗号分隔处理
+            tokens = [t.strip() for t in tokens_str.split(',') if t.strip()]
+            return [{'token': token} for token in tokens]
+            
+        return []
+
+    def _load_from_env(self) -> Dict[str, Any]:
+        """从环境变量加载配置"""
+        # 获取并解析base tokens
+        base_tokens_str = os.getenv('SEATABLE_API_TOKENS') or os.getenv('SEATABLE_API_TOKEN')
+        if not base_tokens_str:
+            raise Exception("环境变量未设置: SEATABLE_API_TOKENS 或 SEATABLE_API_TOKEN")
+            
+        bases = self._parse_base_tokens(base_tokens_str)
+        if not bases:
+            raise Exception("无效的API Token配置")
+
+        return {
+            'seatable': {
+                'bases': bases,
+                'server_url': os.getenv('SEATABLE_SERVER_URL', 'https://cloud.seatable.cn')
+            },
+            'image_bed': {
+                'upload_api': os.getenv('IMAGE_BED_API', 'https://img.shuang.fun/api/tgchannel'),
+                'size_limit': int(os.getenv('IMAGE_SIZE_LIMIT', '5'))  # 默认5MB
+            }
+        }
+
+class ImageProcessor:
+    """图片处理工具"""
+    @staticmethod
+    def get_file_extension(url: str) -> str:
+        """获取文件扩展名"""
+        ext = os.path.splitext(urlparse(url).path)[1]
+        return ext.lower() if ext else '.jpg'
+
+    @staticmethod
+    def is_valid_image_url(url: str) -> bool:
+        """检查是否是有效的图片URL"""
+        if not url:
+            return False
+        ext = ImageProcessor.get_file_extension(url)
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+        return ext in valid_extensions
+
+    @staticmethod
+    def format_file_size(size_bytes: int) -> str:
+        """格式化文件大小"""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024:
+                return f"{size_bytes:.2f}{unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.2f}GB"
 
 class ImageBed:
     """图床管理器"""
@@ -53,12 +135,12 @@ class SeaTableManager:
         self.config = config
         self.api_token = api_token
         self.base = self._init_base()
-        self.image_bed = ImageBed(**config.image_bed_config)
-        self.progress = ProgressManager(**config.progress_config) if config.get('progress', 'save_enabled') else None
+        self.image_bed = ImageBed(upload_api=config.config['image_bed']['upload_api'], 
+                                  size_limit_mb=config.config['image_bed']['size_limit'])
 
     def _init_base(self) -> Base:
         """初始化SeaTable连接"""
-        seatable_config = self.config.seatable_config
+        seatable_config = self.config.config['seatable']
         base = Base(self.api_token, seatable_config['server_url'])
         base.auth()
         return base
@@ -127,7 +209,7 @@ class SeaTableManager:
             # 获取图片列
             image_columns = [col['name'] for col in table.get('columns', []) if col.get('type') == 'image']
             if not image_columns:
-                logger.info(f"[表格] ℹ️ 表���中没有图片列，跳过")
+                logger.info(f"[表格] ℹ️ 表格中没有图片列，跳过")
                 return
 
             logger.info(f"[表格] 📷 发现图片列: {', '.join(image_columns)}")
@@ -167,13 +249,6 @@ class SeaTableManager:
                 for row in rows:
                     stats['processed_rows'] += 1
                     self.process_row(table_name, column_name, row, stats)
-
-                # 更新进度
-                if self.progress:
-                    self.progress.update_table_progress(table_name, {
-                        'last_processed_row': start + len(rows),
-                        'stats': stats
-                    })
 
                 start += len(rows)
                 if len(rows) < page_size:
@@ -247,7 +322,7 @@ def main():
         config = Config()
         
         # 获取所有base配置
-        bases = config.seatable_config['bases']
+        bases = config.config['seatable']['bases']
         logger.info(f"[主程序] 📚 发现 {len(bases)} 个base待处理")
         
         # 处理每个base
